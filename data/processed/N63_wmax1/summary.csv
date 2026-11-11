@@ -1,0 +1,23 @@
+key,value
+n_samples,5082
+n_features,160
+first_date,2005-11-21
+last_date,2025-09-30
+horizon_N,63
+w_max,1.0
+cash_label_share,0.023612750885478158
+oracle_excess_sharpe,4.189766630217712
+equal_weight_stocks_excess_sharpe,0.6368676723020555
+synthetic,False
+n_train,2749
+n_val,703
+n_test,1474
+check_no_nan,True
+check_weights_sum_to_1,True
+check_weights_in_bounds,True
+check_label_end_is_t_plus_N,True
+check_r_fwd_matches_prices,True
+check_x_seq_ends_at_t,True
+check_no_lookahead_in_features,True
+check_no_stale_prices,True
+assets,MC.PA OR.PA BN.PA TTE.PA VIE.PA SAN.PA BNP.PA GLE.PA AIR.PA SU.PA DG.PA SGO.PA AI.PA ORA.PA CAP.PA CASH

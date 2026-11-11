@@ -2,6 +2,13 @@
 Projet 4 - Supervised learning of a Markowitz strategy with a neural network.
 Dataset builder, French equity universe (15 stocks) + a cash asset.
 
+Update done :
+  1. CS.PA (AXA) replaced by REPLACEMENT: Yahoo stores AXA closes rounded to the
+     euro before end-2007 (see probleme_CS_PA.ipynb).
+  2. load_raw re-downloads prices when raw/prices.csv lacks a ticker of TICKERS.
+  3. check_price_quality() in clean(): stops on stale / rounded price series.
+  4. run_checks records "no_stale_prices".
+
 Builds X_t (state vector), Y_t (oracle Markowitz weights on (t+1, t+N)),
 R_fwd (forward compounded returns), label_end (for purging) and the
 train / validation / test split.
@@ -47,11 +54,13 @@ from sklearn.covariance import LedoitWolf
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
+REPLACEMENT = "GLE.PA"   # v1: replaces CS.PA (AXA prices rounded to the euro before 2008)
+
 TICKERS = [
     "MC.PA", "OR.PA", "BN.PA",              # luxury / consumer
     "TTE.PA", "VIE.PA",                     # energy / utilities
     "SAN.PA",                               # health
-    "BNP.PA", "CS.PA",                      # financials
+    "BNP.PA", REPLACEMENT,                  # financials
     "AIR.PA", "SU.PA", "DG.PA", "SGO.PA",   # industrials
     "AI.PA",                                # materials
     "ORA.PA", "CAP.PA",                     # telecom / tech
@@ -194,9 +203,13 @@ def load_raw(out: Path, start: str, end: str, synthetic: bool) -> tuple[pd.DataF
             print(f"  converted {old_p.name} to {p_file.name} (no new download)")
         except ImportError:
             pass
-    if p_file.exists():
-        prices = _read_csv_dated(p_file)
-    else:
+    prices = _read_csv_dated(p_file) if p_file.exists() else None
+    if prices is not None:                   # v1: cached file must contain every ticker
+        missing = set(TICKERS + [MARKET]) - set(prices.columns)
+        if missing:
+            print(f"  {p_file.name} lacks {sorted(missing)}: re-downloading prices")
+            prices = None
+    if prices is None:
         prices = download_prices(start, end)
         prices.to_csv(p_file)                # saved now, so a failed macro step does not re-download
     if m_file.exists():
@@ -216,6 +229,30 @@ def _read_csv_dated(path: Path) -> pd.DataFrame:
 # ----------------------------------------------------------------------------
 # 2. Cleaning and alignment
 # ----------------------------------------------------------------------------
+STALE_MAX = 0.15     # v1: max share of zero-return days, per year and per stock
+MIN_UNIQUE = 100     # v1: min number of distinct prices per full year
+
+
+def check_price_quality(prices: pd.DataFrame, mkt: pd.Series) -> None:
+    """v1: stops on stale / rounded price series; warns on isolated jumps."""
+    r = prices.pct_change(fill_method=None)
+    full = r.index.year > r.index.year.min()                  # skip the first, partial year
+    zero = (r[full] == 0).groupby(r.index[full].year).mean()
+    nuniq = prices[full].groupby(prices.index[full].year).nunique()
+    bad = sorted(set(zero.columns[(zero > STALE_MAX).any()]) |
+                 set(nuniq.columns[(nuniq < MIN_UNIQUE).any()]))
+
+    m = mkt.reindex(r.index)
+    jumps = r.where((r.abs() > 0.15) & (m.abs() < 0.03).to_numpy()[:, None]).stack().dropna()
+    for (d, t), v in jumps.items():
+        print(f"  WARNING - isolated jump {t} {d.date()} {v:+.1%} (market {m.loc[d]:+.1%}): check it")
+
+    if bad:
+        raise RuntimeError(
+            f"Stale or rounded prices for {bad} (zero-return days > {STALE_MAX:.0%} "
+            f"or < {MIN_UNIQUE} distinct prices in a year). Replace them in TICKERS.")
+
+
 def clean(raw_prices: pd.DataFrame, macro: pd.DataFrame):
     """Returns stock prices, stock returns, market returns, aligned macro, daily rf."""
     px = raw_prices.dropna(how="all")                       # calendar = Euronext trading days
@@ -224,6 +261,7 @@ def clean(raw_prices: pd.DataFrame, macro: pd.DataFrame):
     prices = px[TICKERS]
     rets = rets_all[TICKERS]
     mkt = rets_all[MARKET]
+    check_price_quality(prices, mkt)                        # v1
     macro = macro.reindex(px.index.union(macro.index)).ffill().reindex(px.index)
     macro = macro.shift(1)                                  # value for t known at close of t
     rf = (macro["EURIBOR3M"] / 100 / 252).reindex(rets.index).fillna(0.0)  # can be negative (2015-2022)
@@ -467,6 +505,9 @@ def run_checks(X, Y, R_fwd, X_seq, idx, dates, label_end, R, N, w_max,
     res["no_lookahead_in_features"] = bool(
         np.allclose(X_trunc.loc[common].to_numpy(), X_df.loc[common].to_numpy(), equal_nan=True)
     )
+    zero = (rets == 0).groupby(rets.index.year).mean().iloc[1:]   # v1: full years only
+    res["no_stale_prices"] = bool((zero < STALE_MAX).all().all())
+
     failed = [k for k, v in res.items() if not v]
     if failed:
         raise RuntimeError(f"Dataset checks failed: {failed}")
@@ -480,11 +521,11 @@ def parse_args():
     ap.add_argument("--end", default="2025-12-31")
     ap.add_argument("--horizon", type=int, default=63, help="label window N in trading days (63 = 1 quarter)")
     ap.add_argument("--wmax", type=float, default=1.0, help="max weight per stock; 1.0 = no cap (cash is never capped)")
-    ap.add_argument("--out", default="data")
+    ap.add_argument("--out", default="data")              # v1: separate folder
     ap.add_argument("--synthetic", action="store_true", help="simulated data, no download")
     return ap.parse_args()
 
 
 if __name__ == "__main__":
     s = build(parse_args())
-    print(json.dumps({k: v for k, v in s.items() if k != "checks"}, indent=2)) 
+    print(json.dumps({k: v for k, v in s.items() if k != "checks"}, indent=2))
